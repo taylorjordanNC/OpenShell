@@ -58,20 +58,22 @@ navigation:
     contents:
     - page: "Overview"
       path: sandboxes/policies.mdx
-    - page: "Network Policy Recipes"
+    - page: "Manage Policies"
+      path: sandboxes/manage-policies.mdx
+    - page: "Network Recipes"
       path: sandboxes/network-policy-recipes.mdx
-    - page: "Policy Updates"
-      path: reference/policy-updates.mdx
-    - page: "Troubleshoot Policies"
-      path: sandboxes/troubleshoot-policies.mdx
     - page: "Advisor"
       path: sandboxes/policy-advisor.mdx
+    - page: "Troubleshooting"
+      path: sandboxes/troubleshoot-policies.mdx
     - page: "Schema"
       path: reference/policy-schema.mdx
-    - page: "Prover"
-      path: reference/policy-prover.mdx
+    - page: "Commands"
+      path: reference/policy-updates.mdx
     - page: "Default Policy"
       path: reference/default-policy.mdx
+    - page: "Prover"
+      path: reference/policy-prover.mdx
   - page: "Inference"
     path: sandboxes/inference-routing.mdx
 - section: "Extensibility"
