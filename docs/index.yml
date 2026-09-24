@@ -58,6 +58,12 @@ navigation:
     contents:
     - page: "Overview"
       path: sandboxes/policies.mdx
+    - page: "Network Policy Recipes"
+      path: sandboxes/network-policy-recipes.mdx
+    - page: "Policy Updates"
+      path: reference/policy-updates.mdx
+    - page: "Troubleshoot Policies"
+      path: sandboxes/troubleshoot-policies.mdx
     - page: "Advisor"
       path: sandboxes/policy-advisor.mdx
     - page: "Schema"
