@@ -301,7 +301,7 @@ delete, reconciliation removes the row; otherwise it can remain `Deleting`.
 |---|---|---|---|
 | Docker | Local development with Docker available. | Capability-free workload container. | Uses `network_mode=none`; a separate capability-free supervisor container mediates egress and access over a private daemon-local Unix socket volume. |
 | Podman | Existing rootless driver. | Container. | Not converted by this isolation stack. |
-| Kubernetes | Cluster deployment through Helm. | Capability-free sandbox Pod. | Uses one namespace-wide empty-egress workload NetworkPolicy and a separate capability-free supervisor Pod over mutually authenticated TLS. It requires an enforcing CNI and trusted sandbox namespace. |
+| Kubernetes | Cluster deployment through Helm. | Capability-free sandbox Pod. | Always creates a namespace-wide empty-egress workload NetworkPolicy and a separate capability-free supervisor Pod over mutually authenticated TLS. It requires an enforcing CNI and trusted sandbox namespace; the Kubernetes API does not attest policy enforcement. |
 | VM | Experimental microVM isolation. | Per-sandbox libkrun or QEMU VM. | The NIC-less guest runs `openshell-sandbox` as PID 1; host `openshell-supervisor` owns gateway networking and reaches the guest over vsock. |
 | Extension | Out-of-tree drivers operated alongside the gateway. | Whatever boundary the driver implements. | Selected by a custom `compute_drivers = ["<name>"]` entry with `[openshell.drivers.<name>].socket_path`, or at launch time by pairing `--drivers <name>` with `--compute-driver-socket=<path>`. A launch-time endpoint may use a canonical built-in name to preserve its driver-config key while replacing in-process construction. The gateway connects to an operator-provisioned UDS, snapshots `GetCapabilities`, and dispatches all sandbox lifecycle calls through `compute_driver.proto`. The driver process and socket lifecycle are operator-owned; the gateway does not spawn, supervise, or remove unmanaged extension drivers. The trust boundary is the socket's filesystem permissions: the operator must ensure only the gateway uid can read/write it. |
 
@@ -356,7 +356,16 @@ VM runtime state paths are derived only from driver-validated sandbox IDs
 matching `[A-Za-z0-9._-]{1,128}`. The gateway-owned VM driver socket uses a
 private `run/` directory plus Unix peer UID/PID checks. Standalone
 unauthenticated TCP mode is disabled unless explicitly enabled for local
-development.
+development. The VM image cache is owner-only. When the host assembles a
+bootstrap rootfs from OCI layers, cross-layer symlinks may resolve only within
+that rootfs; absolute or escaping targets reject the image before a later layer
+can write through them. Rootfs traversal and mutation use opened directory
+handles with no-follow file creation, so later copies, permission changes, and
+whiteouts cannot be redirected by replacing a validated pathname component.
+The bootstrap rootfs comes only from the operator-configured `bootstrap_image`
+or `default_image`; a sandbox-requested image never becomes the VM bootstrap
+image. The gateway rejects configurations without either trusted source, and
+the standalone driver independently fails startup for the same condition.
 
 Runtime-specific implementation notes belong in the driver crate README:
 

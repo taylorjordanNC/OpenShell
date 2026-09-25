@@ -375,7 +375,7 @@ MicroVM-backed sandboxes run inside VM-backed isolation instead of a container b
 
 The gateway uses the VM compute driver to create VM-backed sandboxes. MicroVM requires host virtualization support. It uses [libkrun](https://github.com/containers/libkrun) with Apple's [Hypervisor framework](https://developer.apple.com/documentation/hypervisor) on macOS, KVM on Linux, and [QEMU](https://www.qemu.org/) for GPU-backed sandboxes on Linux.
 
-The VM driver boots a cached immutable bootstrap ext4 root disk. When the requested sandbox image differs from the bootstrap image, the driver stages the registry image as an OCI layout, unpacks it inside a bootstrap VM with `umoci`, and caches the prepared image disk by image identity. Each sandbox receives that prepared disk read-only plus its own writable `overlay.ext4` disk for `/`, including `/sandbox` writes and runtime TLS material. The overlay persists for the sandbox lifetime and is deleted with the sandbox state directory.
+The VM driver boots a cached immutable bootstrap ext4 root disk. Set `bootstrap_image` explicitly or let it fall back to the operator-configured `default_image`. The gateway rejects the VM configuration when both are empty, and the standalone driver also refuses to start; neither path uses a sandbox-requested image as the VM bootstrap image. When the requested sandbox image differs from the bootstrap image, the driver stages the registry image as an OCI layout, unpacks it inside a bootstrap VM with `umoci`, and caches the prepared image disk by image identity. Each sandbox receives that prepared disk read-only plus its own writable `overlay.ext4` disk for `/`, including `/sandbox` writes and runtime TLS material. The overlay persists for the sandbox lifetime and is deleted with the sandbox state directory.
 
 VM sandbox creation follows the same progress model as Kubernetes-backed sandboxes. The gateway accepts the sandbox, then the VM driver publishes watch events while it resolves the image, prepares or reuses the bootstrap and prepared image caches, creates the writable overlay, and starts the VM launcher.
 
@@ -442,6 +442,11 @@ than being staged into the guest. See the [Gateway Configuration File](./gateway
 Kubernetes-backed sandboxes run as pods in the configured sandbox namespace. Use Kubernetes for shared clusters, remote compute, GPU scheduling, and operator-managed environments.
 
 <Warning>
+The cluster CNI MUST enforce ingress and egress `NetworkPolicy` in every sandbox
+namespace. OpenShell creates the workload policy, but the Kubernetes API cannot
+confirm enforcement. Without it, workload pods may connect directly and bypass
+supervisor network policy.
+
 Kubernetes workspace namespaces are an administrative trust boundary. In
 shared and managed modes, only the OpenShell gateway and its trusted Agent
 Sandbox controller may administer Sandbox CRs, sandbox pods, or the configured
@@ -471,7 +476,6 @@ For maintainer-level implementation details, refer to the [Kubernetes driver REA
 | `sandbox_runtime_image_pull_policy` | `sandboxRuntime.image.pullPolicy` | Set the Kubernetes image pull policy for the sandbox runtime image. |
 | `supervisor_image` | `supervisor.image.registry` / `supervisor.image.repository` / `supervisor.image.tag` / `supervisor.image.digest` | Override the image that provides `openshell-supervisor`. Individual image values take precedence over `global.image`; a digest takes precedence over the tag. |
 | `supervisor_image_pull_policy` | `supervisor.image.pullPolicy` | Set the canonical supervisor pull policy: `always`, `if_not_present`, or `never`. `newer` is Podman-only. |
-| `sandbox_runtime.network_policy_enforced` | `supervisor.sandboxRuntime.networkPolicyEnforced` | Acknowledge that the cluster CNI enforces ingress and egress `NetworkPolicy` in sandbox namespaces. This must be `true`. |
 | `sandbox_runtime.boundary_port` | `supervisor.sandboxRuntime.boundaryPort` | Set the non-privileged TLS port used between the paired supervisor and sandbox Pods. |
 | `https_proxy` | `upstreamProxy.url` | Set the operator-owned `http://host:port` or `https://host:port` corporate forward proxy used for policy-approved TLS CONNECT egress. |
 | `no_proxy` | `upstreamProxy.noProxy` | Set destinations that bypass only the corporate proxy. OpenShell policy evaluation still applies. |

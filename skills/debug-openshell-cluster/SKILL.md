@@ -335,6 +335,12 @@ Common findings:
 - On Linux, verify that the host-networked Podman supervisor can reach the
   gateway's primary loopback endpoint. On macOS, verify Podman Machine's
   host-loopback forwarding or configure an explicit `grpc_endpoint`.
+- If `host.openshell.internal` does not resolve inside a workload, verify its
+  `/etc/resolv.conf` contains `nameserver 127.0.0.53`. The Podman driver mounts
+  that file from a per-sandbox secret and supplies the alias destination to the
+  supervisor. Check `host_gateway_ip` only when the platform default
+  (`127.0.0.1` on native Linux or `192.168.127.254` on macOS Podman Machine)
+  does not reach the gateway host.
 
 When `userns` is configured (e.g. `userns = "auto"` or `userns = "keep-id"`):
 
@@ -702,9 +708,8 @@ kubectl -n <sandbox-namespace> get sandbox <sandbox-name> -o jsonpath='{.spec.te
 ```
 
 The Kubernetes driver creates a sandbox workload Pod and a separate, directly
-managed supervisor Pod. Helm must render
-`network_policy_enforced = true`. This is an explicit operator assertion that
-the cluster CNI enforces Kubernetes NetworkPolicy; the Kubernetes API cannot
+managed supervisor Pod. The cluster CNI must enforce ingress and egress
+Kubernetes NetworkPolicy in every sandbox namespace; the Kubernetes API cannot
 attest enforcement. Run sandboxes only in a trusted namespace
 where tenants cannot create Pods, copy OpenShell role labels, or read the
 bootstrap Secret.
