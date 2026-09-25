@@ -62,9 +62,9 @@ navigation:
       path: sandboxes/network-rules.mdx
     - page: "Manage Policies"
       path: sandboxes/manage-policies.mdx
-    - page: "Prover"
+    - page: "Policy Prover"
       path: reference/policy-prover.mdx
-    - page: "Advisor"
+    - page: "Policy Advisor"
       path: sandboxes/policy-advisor.mdx
     - page: "Schema"
       path: reference/policy-schema.mdx
