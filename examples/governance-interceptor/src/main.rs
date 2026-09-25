@@ -409,19 +409,12 @@ impl GovernanceInterceptorService {
         // the ceiling.
         let effective_policy = match operation.pointer("/spec/policy") {
             Some(requested) => {
-                // The requested policy arrives in the authored policy language
-                // (access presets such as "read-write"), so parse it with the
-                // policy schema parser instead of protobuf JSON. JSON is a
-                // YAML subset, so the parser accepts the serialized request
-                // value directly.
-                let requested_yaml = serde_json::to_string(requested)
-                    .map_err(|err| Status::invalid_argument(err.to_string()))?;
-                let requested_proto = parse_sandbox_policy(&requested_yaml)
-                    .map_err(|err| Status::invalid_argument(err.to_string()))?;
-                let requested_json = sandbox_policy_to_proto_json(&requested_proto)
-                    .and_then(normalize_for_struct)
-                    .map_err(Status::invalid_argument)?;
-                narrow_policy_to_ceiling(&requested_json, &policy_state.policy)
+                // The requested policy arrives as camelCase ProtoJSON with
+                // authored access presets; narrowing against the ceiling both
+                // caps access (matched endpoints inherit the ceiling's
+                // endpoint object, whose access is the governance-vended
+                // enum) and drops anything the ceiling does not declare.
+                narrow_policy_to_ceiling(requested, &policy_state.policy)
             }
             None => policy_state.policy.clone(),
         };
@@ -689,7 +682,7 @@ fn validate_create_sandbox(
 /// narrow the baseline; it can never widen it.
 fn narrow_policy_to_ceiling(requested: &Value, ceiling: &Value) -> Value {
     let mut effective = ceiling.clone();
-    let Some(ceiling_network) = ceiling.get("network_policies").and_then(Value::as_object) else {
+    let Some(ceiling_network) = ceiling.get("networkPolicies").and_then(Value::as_object) else {
         return effective;
     };
     let mut ceiling_endpoints: std::collections::HashSet<(String, Value)> =
@@ -715,7 +708,7 @@ fn narrow_policy_to_ceiling(requested: &Value, ceiling: &Value) -> Value {
         }
     }
     let narrowed = requested
-        .get("network_policies")
+        .get("networkPolicies")
         .and_then(Value::as_object)
         .map(|requested_rules| {
             let mut narrowed = serde_json::Map::new();
@@ -772,7 +765,7 @@ fn narrow_policy_to_ceiling(requested: &Value, ceiling: &Value) -> Value {
             narrowed
         })
         .unwrap_or_default();
-    effective["network_policies"] = Value::Object(narrowed);
+    effective["networkPolicies"] = Value::Object(narrowed);
     effective
 }
 
