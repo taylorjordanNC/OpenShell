@@ -363,7 +363,7 @@ impl GovernanceInterceptorService {
 
         match (evaluation.method.as_str(), phase) {
             ("CreateSandbox", interceptor_evaluation::Phase::ModifyOperation(_)) => {
-                Self::patch_create_sandbox(&operation, &policy_state)
+                Self::patch_create_sandbox(&operation, &policy_state, &self.policy_signer)
             }
             ("CreateSandbox", interceptor_evaluation::Phase::Validate(_)) => {
                 Ok(validate_create_sandbox(
@@ -398,25 +398,50 @@ impl GovernanceInterceptorService {
     fn patch_create_sandbox(
         operation: &Value,
         policy_state: &PolicyState,
+        policy_signer: &PolicySigner,
     ) -> Result<InterceptorResult, Status> {
+        // Sandboxes may narrow the governance baseline: a policy supplied at
+        // create time is intersected with the ceiling (only endpoints and
+        // binaries the ceiling also declares survive), and the narrowed
+        // policy is signed. Without a requested policy the ceiling applies
+        // as-is. Filesystem, landlock, and process posture always come from
+        // the ceiling.
+        let effective_policy = match operation.pointer("/spec/policy") {
+            Some(requested) => {
+                let requested = sandbox_policy_from_interceptor_json(requested)
+                    .and_then(|proto| sandbox_policy_to_proto_json(&proto))
+                    .and_then(normalize_for_struct)
+                    .map_err(Status::invalid_argument)?;
+                narrow_policy_to_ceiling(&requested, &policy_state.policy)
+            }
+            None => policy_state.policy.clone(),
+        };
+        let effective_proto = sandbox_policy_from_interceptor_json(&effective_policy)
+            .map_err(Status::invalid_argument)?;
+        let effective_hash = canonical_policy_hash(&effective_proto)
+            .map_err(Status::invalid_argument)?;
+        let effective_signature = policy_signer
+            .sign_policy(&effective_hash)
+            .map_err(Status::internal)?;
+
         let mut patches = Vec::new();
         if operation.get("spec").is_some_and(Value::is_object) {
             patches.push(json_patch(
                 "add",
                 "/spec/policy",
-                policy_state.policy.clone(),
+                effective_policy.clone(),
             )?);
         } else {
             patches.push(json_patch(
                 "add",
                 "/spec",
                 json!({
-                    "policy": policy_state.policy.clone(),
+                    "policy": effective_policy,
                 }),
             )?);
         }
 
-        add_policy_signature_patches(operation, &mut patches, &policy_state.policy_signature)?;
+        add_policy_signature_patches(operation, &mut patches, &effective_signature)?;
 
         let mut result = allow();
         result.patches = patches;
@@ -426,10 +451,10 @@ impl GovernanceInterceptorService {
         );
         result
             .log_annotations
-            .insert("policy_hash".to_string(), policy_state.policy_hash.clone());
+            .insert("policy_hash".to_string(), effective_hash);
         result.log_annotations.insert(
             "policy_signature_kid".to_string(),
-            policy_state.policy_signature_kid.clone(),
+            policy_signer.kid().to_string(),
         );
         Ok(result)
     }
@@ -647,6 +672,95 @@ fn validate_create_sandbox(
     allow()
 }
 
+/// Narrow a requested sandbox policy to the governance ceiling: network
+/// endpoints survive only when the ceiling also declares them (host:port
+/// match), and binaries survive only when the ceiling allows them.
+/// Filesystem, landlock, and process sections always come from the ceiling,
+/// so governance retains control of the non-network posture. A sandbox may
+/// narrow the baseline; it can never widen it.
+fn narrow_policy_to_ceiling(requested: &Value, ceiling: &Value) -> Value {
+    let mut effective = ceiling.clone();
+    let Some(ceiling_network) = ceiling.get("network_policies").and_then(Value::as_object) else {
+        return effective;
+    };
+    let mut ceiling_endpoints: std::collections::HashSet<(String, Value)> =
+        std::collections::HashSet::new();
+    let mut ceiling_binaries: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for rule in ceiling_network.values() {
+        if let Some(endpoints) = rule.get("endpoints").and_then(Value::as_array) {
+            for ep in endpoints {
+                if let (Some(host), Some(port)) = (ep.get("host"), ep.get("port")) {
+                    ceiling_endpoints.insert((
+                        host.as_str().unwrap_or_default().to_string(),
+                        port.clone(),
+                    ));
+                }
+            }
+        }
+        if let Some(binaries) = rule.get("binaries").and_then(Value::as_array) {
+            for binary in binaries {
+                if let Some(path) = binary.get("path").and_then(Value::as_str) {
+                    ceiling_binaries.insert(path.to_string());
+                }
+            }
+        }
+    }
+    let narrowed = requested
+        .get("network_policies")
+        .and_then(Value::as_object)
+        .map(|requested_rules| {
+            let mut narrowed = serde_json::Map::new();
+            for (key, rule) in requested_rules {
+                let Some(rule_obj) = rule.as_object() else {
+                    continue;
+                };
+                let endpoints: Vec<Value> = rule_obj
+                    .get("endpoints")
+                    .and_then(Value::as_array)
+                    .map(|eps| {
+                        eps.iter()
+                            .filter(|ep| {
+                                ceiling_endpoints.contains(&(
+                                    ep.get("host")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                    ep.get("port").cloned().unwrap_or(Value::Null),
+                                ))
+                            })
+                            .cloned()
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let binaries: Vec<Value> = rule_obj
+                    .get("binaries")
+                    .and_then(Value::as_array)
+                    .map(|binaries| {
+                        binaries
+                            .iter()
+                            .filter(|binary| {
+                                ceiling_binaries
+                                    .contains(binary.get("path").and_then(Value::as_str).unwrap_or(""))
+                            })
+                            .cloned()
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if endpoints.is_empty() {
+                    continue;
+                }
+                let mut narrowed_rule = rule_obj.clone();
+                narrowed_rule.insert("endpoints".to_string(), Value::Array(endpoints));
+                narrowed_rule.insert("binaries".to_string(), Value::Array(binaries));
+                narrowed.insert(key.clone(), Value::Object(narrowed_rule));
+            }
+            narrowed
+        })
+        .unwrap_or_default();
+    effective["network_policies"] = Value::Object(narrowed);
+    effective
+}
+
 fn validate_signed_policy_payload(
     policy: &Value,
     signature: &str,
@@ -658,10 +772,13 @@ fn validate_signed_policy_payload(
     policy_signer
         .verify_policy_signature(signature, &sandbox_policy_hash)
         .map_err(|err| format!("sandbox policy signature is invalid: {err}"))?;
-    if sandbox_policy_hash != policy_state.policy_hash
-        || sandbox_policy != policy_state.policy_proto
-    {
-        return Err("sandbox policy must match the provider governance baseline".to_string());
+    // Sandboxes may narrow the governance baseline but never widen it: the
+    // effective policy must equal its own narrowing against the ceiling. The
+    // signature above already covers the effective policy — the interceptor
+    // signed it at modify time.
+    let narrowed = narrow_policy_to_ceiling(policy, &policy_state.policy);
+    if narrowed != *policy {
+        return Err("sandbox policy exceeds the provider governance baseline".to_string());
     }
     Ok(())
 }
