@@ -855,7 +855,7 @@ Every sandbox moves through a defined set of phases:
 Before workload activation, OpenShell validates the effective policy and matching
 provider configuration. A rejection keeps the workload unstarted and exposes a
 `ConfigurationInvalid` condition in `Provisioning`. Use `openshell sandbox get`
-to inspect the diagnostic, then [repair the policy or provider configuration](/sandboxes/troubleshoot-policies#repair-initial-configuration).
+to inspect the diagnostic, then [repair the policy or provider configuration](/sandboxes/manage-policies#a-new-sandbox-stays-in-provisioning).
 Management operations remain available while startup is blocked. After repair,
 the supervisor completes startup without recreating the sandbox. Starting a
 stopped sandbox repeats configuration admission before launching its workload.
