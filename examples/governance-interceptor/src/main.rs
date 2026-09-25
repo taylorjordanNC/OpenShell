@@ -409,11 +409,19 @@ impl GovernanceInterceptorService {
         // the ceiling.
         let effective_policy = match operation.pointer("/spec/policy") {
             Some(requested) => {
-                let requested = sandbox_policy_from_interceptor_json(requested)
-                    .and_then(|proto| sandbox_policy_to_proto_json(&proto))
+                // The requested policy arrives in the authored policy language
+                // (access presets such as "read-write"), so parse it with the
+                // policy schema parser instead of protobuf JSON. JSON is a
+                // YAML subset, so the parser accepts the serialized request
+                // value directly.
+                let requested_yaml = serde_json::to_string(requested)
+                    .map_err(|err| Status::invalid_argument(err.to_string()))?;
+                let requested_proto = parse_sandbox_policy(&requested_yaml)
+                    .map_err(|err| Status::invalid_argument(err.to_string()))?;
+                let requested_json = sandbox_policy_to_proto_json(&requested_proto)
                     .and_then(normalize_for_struct)
                     .map_err(Status::invalid_argument)?;
-                narrow_policy_to_ceiling(&requested, &policy_state.policy)
+                narrow_policy_to_ceiling(&requested_json, &policy_state.policy)
             }
             None => policy_state.policy.clone(),
         };
@@ -715,21 +723,26 @@ fn narrow_policy_to_ceiling(requested: &Value, ceiling: &Value) -> Value {
                 let Some(rule_obj) = rule.as_object() else {
                     continue;
                 };
+                // Matched endpoints inherit the ceiling's endpoint object so a
+                // request can never widen access beyond what governance vends.
                 let endpoints: Vec<Value> = rule_obj
                     .get("endpoints")
                     .and_then(Value::as_array)
                     .map(|eps| {
                         eps.iter()
-                            .filter(|ep| {
-                                ceiling_endpoints.contains(&(
-                                    ep.get("host")
-                                        .and_then(Value::as_str)
-                                        .unwrap_or_default()
-                                        .to_string(),
-                                    ep.get("port").cloned().unwrap_or(Value::Null),
-                                ))
+                            .filter_map(|ep| {
+                                let host = ep.get("host").and_then(Value::as_str)?;
+                                let port = ep.get("port");
+                                ceiling_network
+                                    .values()
+                                    .flat_map(|r| r.get("endpoints").and_then(Value::as_array))
+                                    .flatten()
+                                    .find(|candidate| {
+                                        candidate.get("host").and_then(Value::as_str) == Some(host)
+                                            && candidate.get("port") == port
+                                    })
+                                    .cloned()
                             })
-                            .cloned()
                             .collect()
                     })
                     .unwrap_or_default();
@@ -740,8 +753,9 @@ fn narrow_policy_to_ceiling(requested: &Value, ceiling: &Value) -> Value {
                         binaries
                             .iter()
                             .filter(|binary| {
-                                ceiling_binaries
-                                    .contains(binary.get("path").and_then(Value::as_str).unwrap_or(""))
+                                ceiling_binaries.contains(
+                                    binary.get("path").and_then(Value::as_str).unwrap_or(""),
+                                )
                             })
                             .cloned()
                             .collect()
